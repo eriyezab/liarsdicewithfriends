@@ -404,7 +404,8 @@ function listenToLobby() {
     const statusListener = currentLobbyRef.child('status').on('value', (snapshot) => {
         const status = snapshot.val();
         if (status === 'active') {
-            // Game has started
+            // Game has started - update disconnect handler to allow reconnection
+            setupDisconnectHandler();
             enterGame();
         } else if (status === 'finished') {
             // Game finished
@@ -943,6 +944,10 @@ async function setupDisconnectHandler() {
 
     const playerRef = currentLobbyRef.child(`players/${currentUser.uid}`);
 
+    // Cancel any existing disconnect handlers first
+    await playerRef.onDisconnect().cancel();
+    await playerRef.child('isConnected').onDisconnect().cancel();
+
     // Set connected status
     await playerRef.child('isConnected').set(true);
 
@@ -953,10 +958,10 @@ async function setupDisconnectHandler() {
     // Different behavior based on game status
     if (status === 'waiting') {
         // In lobby: remove player on disconnect (clean exit)
-        playerRef.onDisconnect().remove();
+        await playerRef.onDisconnect().remove();
     } else {
         // In active game: just mark as disconnected (allow reconnection)
-        playerRef.child('isConnected').onDisconnect().set(false);
+        await playerRef.child('isConnected').onDisconnect().set(false);
     }
 }
 
