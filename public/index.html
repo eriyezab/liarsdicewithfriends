@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Liar's Dice with Friends</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Main Menu Screen -->
+        <div id="main-menu" class="screen active">
+            <div class="container">
+                <h1>Liar's Dice with Friends</h1>
+                <div class="menu-card">
+                    <div class="form-group">
+                        <label for="player-name">Your Name:</label>
+                        <input type="text" id="player-name" placeholder="Enter your name" maxlength="20">
+                    </div>
+                    <button id="create-lobby-btn" class="btn btn-primary">Create New Lobby</button>
+                    <div class="divider">OR</div>
+                    <div class="form-group">
+                        <label for="lobby-code">Lobby Code:</label>
+                        <input type="text" id="lobby-code" placeholder="Enter lobby code" maxlength="20">
+                    </div>
+                    <button id="join-lobby-btn" class="btn btn-secondary">Join Lobby</button>
+                </div>
+                <div id="auth-status" class="auth-status"></div>
+            </div>
+        </div>
+
+        <!-- Lobby Screen -->
+        <div id="lobby-screen" class="screen">
+            <div class="container">
+                <div class="lobby-header">
+                    <h2>Lobby</h2>
+                    <div class="lobby-code-display">
+                        Code: <span id="current-lobby-code" class="code">----</span>
+                        <button id="copy-code-btn" class="btn-icon" title="Copy code">📋</button>
+                    </div>
+                </div>
+
+                <div class="lobby-content">
+                    <div class="lobby-info">
+                        <div class="info-item">
+                            <span class="label">Host:</span>
+                            <span id="lobby-host">---</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Players:</span>
+                            <span id="player-count">0/10</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Game Mode:</span>
+                            <select id="game-mode-select" class="game-mode-select" disabled>
+                                <option value="standard">Standard</option>
+                                <option value="elimination">Elimination</option>
+                                <option value="common_hand">Common Hand</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="players-list" id="players-list">
+                        <!-- Players will be dynamically added here -->
+                    </div>
+
+                    <div class="lobby-actions">
+                        <button id="start-game-btn" class="btn btn-primary" style="display: none;">Start Game</button>
+                        <button id="leave-lobby-btn" class="btn btn-danger">Leave Lobby</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="game-screen" class="screen">
+            <div class="container">
+                <div class="game-header">
+                    <h2>Liar's Dice</h2>
+                    <button id="leave-game-btn" class="btn btn-danger btn-sm">Leave Game</button>
+                </div>
+
+                <div class="game-content">
+                    <!-- Game Status -->
+                    <div class="game-status">
+                        <div class="status-item">
+                            <span class="label">Round:</span>
+                            <span id="round-number">1</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="label">Total Dice:</span>
+                            <span id="total-dice">0</span>
+                        </div>
+                        <div class="status-item turn-indicator">
+                            <span id="turn-status">Waiting for players...</span>
+                        </div>
+                    </div>
+
+                    <!-- Your Dice -->
+                    <div class="your-dice-section">
+                        <h3>Your Dice</h3>
+                        <div id="your-dice" class="dice-container">
+                            <!-- Dice will be rendered here -->
+                        </div>
+                    </div>
+
+                    <!-- Current Bid -->
+                    <div class="current-bid-section">
+                        <h3>Current Bid</h3>
+                        <div id="current-bid" class="current-bid">
+                            <span class="no-bid">No bids yet</span>
+                        </div>
+                    </div>
+
+                    <!-- Game Actions -->
+                    <div class="game-actions">
+                        <div class="bid-controls" id="bid-controls">
+                            <h3>Make a Bid</h3>
+                            <div class="bid-input-group">
+                                <div class="input-wrapper">
+                                    <label for="bid-quantity">Quantity:</label>
+                                    <input type="number" id="bid-quantity" min="1" value="1">
+                                </div>
+                                <div class="input-wrapper">
+                                    <label for="bid-face">Face:</label>
+                                    <select id="bid-face">
+                                        <option value="1">⚀ 1</option>
+                                        <option value="2">⚁ 2</option>
+                                        <option value="3">⚂ 3</option>
+                                        <option value="4">⚃ 4</option>
+                                        <option value="5">⚄ 5</option>
+                                        <option value="6">⚅ 6</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <button id="make-bid-btn" class="btn btn-primary" disabled>Make Bid</button>
+                            <button id="call-bluff-btn" class="btn btn-danger" disabled>Call Bluff!</button>
+                        </div>
+                    </div>
+
+                    <!-- Players in Game -->
+                    <div class="game-players-section">
+                        <h3>Players</h3>
+                        <div id="game-players-list" class="game-players-list">
+                            <!-- Players will be rendered here -->
+                        </div>
+                    </div>
+
+                    <!-- Game Log -->
+                    <div class="game-log-section">
+                        <h3>Game Log</h3>
+                        <div id="game-log" class="game-log">
+                            <!-- Log entries will be added here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+
+    <!-- Firebase Configuration -->
+    <script src="config.js"></script>
+
+    <!-- Your App -->
+    <script src="app.js"></script>
+</body>
+</html>
