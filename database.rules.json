@@ -23,7 +23,7 @@
 
         "players": {
           "$playerId": {
-            ".write": "!data.exists() && auth.uid === $playerId && root.child('lobbies').child($lobbyId).child('status').val() === 'waiting'"
+            ".write": "auth.uid === $playerId && (!data.exists() && root.child('lobbies').child($lobbyId).child('status').val() === 'waiting' || data.exists())"
           },
           ".indexOn": ["joinedAt"]
         },

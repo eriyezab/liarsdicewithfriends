@@ -5,6 +5,12 @@
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const database = firebase.database();
+const functions = firebase.functions();
+
+// Use local emulator for Cloud Functions during development
+if (location.hostname === 'localhost') {
+    functions.useEmulator('localhost', 5001);
+}
 
 // Application State
 let currentUser = null;
@@ -24,24 +30,171 @@ const screens = {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
-    authenticateAnonymously();
+    setupAuthentication();
 });
 
-// Authentication
-function authenticateAnonymously() {
+// Setup authentication with state observer
+function setupAuthentication() {
     const authStatus = document.getElementById('auth-status');
     authStatus.textContent = 'Connecting...';
 
-    auth.signInAnonymously()
-        .then((userCredential) => {
-            currentUser = userCredential.user;
-            authStatus.textContent = 'Connected';
-            console.log('Authenticated:', currentUser.uid);
+    // Set persistence to LOCAL (survives page refreshes and browser restarts)
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+        .then(() => {
+            // Listen to auth state changes (handles both new sign-in and restored sessions)
+            auth.onAuthStateChanged((user) => {
+                if (user) {
+                    // User is signed in (either new or restored from refresh)
+                    currentUser = user;
+                    authStatus.textContent = 'Connected';
+                    console.log('Authenticated:', currentUser.uid);
+
+                    // Check if we should rejoin an existing session
+                    checkForExistingSession();
+                } else {
+                    // No user, sign in anonymously
+                    auth.signInAnonymously()
+                        .catch((error) => {
+                            authStatus.textContent = 'Connection failed';
+                            console.error('Auth error:', error);
+                        });
+                }
+            });
         })
         .catch((error) => {
+            console.error('Error setting auth persistence:', error);
             authStatus.textContent = 'Connection failed';
-            console.error('Auth error:', error);
         });
+}
+
+// Check for existing session and auto-rejoin
+function checkForExistingSession() {
+    // Check URL hash first (#lobby/ABC123)
+    const hash = window.location.hash;
+    if (hash.startsWith('#lobby/')) {
+        const lobbyCode = hash.replace('#lobby/', '');
+        const savedPlayerName = localStorage.getItem('playerName');
+        const savedUserId = localStorage.getItem('userId');
+
+        // Only attempt rejoin if user ID matches (same anonymous session)
+        if (savedPlayerName && lobbyCode && currentUser && savedUserId === currentUser.uid) {
+            attemptRejoin(lobbyCode, savedPlayerName);
+        } else if (savedUserId && savedUserId !== currentUser.uid) {
+            // User ID changed (new anonymous session), can't rejoin
+            console.log('User ID changed, cannot auto-rejoin. Old:', savedUserId, 'New:', currentUser.uid);
+            clearSession();
+            alert('Session expired. Please join the lobby again using the code.');
+        }
+    }
+}
+
+// Attempt to rejoin existing lobby
+async function attemptRejoin(lobbyCode, savedPlayerName) {
+    try {
+        const lobbyRef = database.ref(`lobbies/${lobbyCode}`);
+        const snapshot = await lobbyRef.once('value');
+
+        if (!snapshot.exists()) {
+            // Lobby no longer exists
+            console.log('Lobby no longer exists');
+            localStorage.removeItem('currentLobbyId');
+            localStorage.removeItem('playerName');
+            window.location.hash = '';
+            return;
+        }
+
+        const lobbyData = snapshot.val();
+        console.log('Attempting to rejoin lobby:', lobbyCode, 'Status:', lobbyData.status);
+
+        // Check if we're already a player in this lobby
+        if (lobbyData.players && lobbyData.players[currentUser.uid]) {
+            // Player exists - reconnecting
+            console.log('Player exists in lobby, reconnecting...');
+            currentLobbyId = lobbyCode;
+            currentLobbyRef = lobbyRef;
+            playerName = savedPlayerName;
+            isHost = lobbyData.players[currentUser.uid].isHost || false;
+
+            // Cancel any existing disconnect handlers before setting up new ones
+            await currentLobbyRef.child(`players/${currentUser.uid}`).onDisconnect().cancel();
+
+            // Update connection status
+            await currentLobbyRef.child(`players/${currentUser.uid}/isConnected`).set(true);
+
+            // Set up new disconnect handler
+            await setupDisconnectHandler();
+
+            // Log reconnection in game history if game is active
+            if (lobbyData.status === 'active') {
+                await currentLobbyRef.child('history').push({
+                    type: 'player_reconnected',
+                    data: {
+                        playerName: savedPlayerName
+                    },
+                    timestamp: firebase.database.ServerValue.TIMESTAMP
+                });
+                console.log('Entering game screen...');
+                enterGame();
+            } else {
+                console.log('Entering lobby screen...');
+                enterLobby();
+            }
+        } else {
+            // Player doesn't exist - was removed on disconnect (lobby waiting period)
+            // Re-add them to the lobby
+            const playerCount = lobbyData.players ? Object.keys(lobbyData.players).length : 0;
+
+            if (playerCount >= 10) {
+                alert('Lobby is now full (max 10 players)');
+                clearSession();
+                return;
+            }
+
+            if (lobbyData.status !== 'waiting') {
+                alert('Game has already started, cannot rejoin');
+                clearSession();
+                return;
+            }
+
+            // Re-add player to lobby
+            await lobbyRef.child(`players/${currentUser.uid}`).set({
+                name: savedPlayerName,
+                joinedAt: firebase.database.ServerValue.TIMESTAMP,
+                isHost: false,  // Cannot be host on rejoin
+                isConnected: true,
+                diceCount: 5,
+                isEliminated: false
+            });
+
+            currentLobbyId = lobbyCode;
+            currentLobbyRef = lobbyRef;
+            playerName = savedPlayerName;
+            isHost = false;
+
+            setupDisconnectHandler();
+            enterLobby();
+        }
+    } catch (error) {
+        console.error('Error rejoining lobby:', error);
+    }
+}
+
+// Save session to localStorage
+function saveSession() {
+    if (currentLobbyId && playerName && currentUser) {
+        localStorage.setItem('currentLobbyId', currentLobbyId);
+        localStorage.setItem('playerName', playerName);
+        localStorage.setItem('userId', currentUser.uid);
+        window.location.hash = `#lobby/${currentLobbyId}`;
+    }
+}
+
+// Clear session from localStorage
+function clearSession() {
+    localStorage.removeItem('currentLobbyId');
+    localStorage.removeItem('playerName');
+    localStorage.removeItem('userId');
+    window.location.hash = '';
 }
 
 // Event Listeners Setup
@@ -207,6 +360,9 @@ async function joinLobby() {
 
 // Enter Lobby Screen
 function enterLobby() {
+    // Save session
+    saveSession();
+
     // Update UI
     document.getElementById('current-lobby-code').textContent = currentLobbyId;
 
@@ -421,6 +577,32 @@ function listenToGame() {
     const playersListener = currentLobbyRef.child('players').on('value', (snapshot) => {
         const players = snapshot.val();
         if (players) {
+            // Track connection status changes
+            if (!window.playerConnectionStates) {
+                window.playerConnectionStates = {};
+            }
+
+            // Check for connection status changes and log them
+            Object.entries(players).forEach(([playerId, player]) => {
+                const prevState = window.playerConnectionStates[playerId];
+                const currState = player.isConnected;
+
+                // Only log if state changed and we have a previous state
+                if (prevState !== undefined && prevState !== currState) {
+                    // Log disconnect/reconnect event to history
+                    currentLobbyRef.child('history').push({
+                        type: currState ? 'player_reconnected' : 'player_disconnected',
+                        data: {
+                            playerName: player.name
+                        },
+                        timestamp: firebase.database.ServerValue.TIMESTAMP
+                    });
+                }
+
+                // Update tracked state
+                window.playerConnectionStates[playerId] = currState;
+            });
+
             updateGamePlayersList(players);
             updateTotalDice(players);
         }
@@ -575,7 +757,16 @@ function formatLogEntry(entry) {
         case 'bluff_call':
             return `⚠️ ${entry.data.callerName} called bluff!`;
         case 'bluff_result':
-            return `${entry.data.success ? '✓' : '✗'} ${entry.data.message}`;
+            const bidResult = entry.data.bidWasAccurate ? 'accurate' : 'a bluff';
+            return `${entry.data.bidWasAccurate ? '✓' : '✗'} Bid was ${bidResult}! Actual: ${entry.data.actualCount}. ${entry.data.loserName} loses a die.`;
+        case 'new_round':
+            return `🔄 Round ${entry.data.roundNumber} begins! ${entry.data.startingPlayer} starts.`;
+        case 'game_over':
+            return `🏆 ${entry.data.winnerName} wins the game!`;
+        case 'player_disconnected':
+            return `🔴 ${entry.data.playerName} disconnected`;
+        case 'player_reconnected':
+            return `🟢 ${entry.data.playerName} reconnected`;
         default:
             return JSON.stringify(entry.data);
     }
@@ -674,17 +865,23 @@ async function callBluff() {
             timestamp: firebase.database.ServerValue.TIMESTAMP
         });
 
-        // This is where you'd implement the bluff resolution logic
-        // For now, we'll just alert - you'll need to implement server-side validation
-        alert('Bluff calling needs server-side validation via Cloud Functions. Coming soon!');
+        // Call Cloud Function to resolve bluff
+        const resolveBluff = functions.httpsCallable('resolve_bluff');
+        const result = await resolveBluff({ lobbyId: currentLobbyId });
 
-        // TODO: Call Cloud Function to resolve bluff
-        // The function should:
-        // 1. Count all dice matching the bid
-        // 2. Determine if bid was accurate
-        // 3. Make loser lose a die
-        // 4. Check for elimination
-        // 5. Start new round with new dice
+        // Display result
+        const data = result.data;
+        const message = `Bluff called!\n\n` +
+            `Bid: ${gameState.currentBid.quantity} × ${getDiceFace(gameState.currentBid.face)}\n` +
+            `Actual count: ${data.actualCount}\n` +
+            `Result: ${data.bidWasAccurate ? 'Bid was accurate!' : 'It was a bluff!'}\n` +
+            `${data.loserName} loses a die!`;
+
+        alert(message);
+
+        if (data.gameOver) {
+            alert(`🎉 Game Over! ${data.winner} wins!`);
+        }
 
     } catch (error) {
         console.error('Error calling bluff:', error);
@@ -717,10 +914,18 @@ function cleanupLobby() {
         currentLobbyRef.child(`players/${currentUser.uid}`).remove();
     }
 
+    // Clear session
+    clearSession();
+
     // Reset state
     currentLobbyId = null;
     currentLobbyRef = null;
     isHost = false;
+
+    // Clear connection state tracking
+    if (window.playerConnectionStates) {
+        window.playerConnectionStates = {};
+    }
 
     // Return to main menu
     switchScreen('mainMenu');
@@ -733,19 +938,26 @@ function handleGameFinished() {
 }
 
 // Setup Disconnect Handler
-function setupDisconnectHandler() {
+async function setupDisconnectHandler() {
     if (!currentLobbyRef || !currentUser) return;
 
     const playerRef = currentLobbyRef.child(`players/${currentUser.uid}`);
 
     // Set connected status
-    playerRef.child('isConnected').set(true);
+    await playerRef.child('isConnected').set(true);
 
-    // On disconnect, mark as disconnected
-    playerRef.child('isConnected').onDisconnect().set(false);
+    // Get current lobby status
+    const statusSnapshot = await currentLobbyRef.child('status').once('value');
+    const status = statusSnapshot.val();
 
-    // Optional: Remove player after some time of disconnection
-    // playerRef.onDisconnect().remove();
+    // Different behavior based on game status
+    if (status === 'waiting') {
+        // In lobby: remove player on disconnect (clean exit)
+        playerRef.onDisconnect().remove();
+    } else {
+        // In active game: just mark as disconnected (allow reconnection)
+        playerRef.child('isConnected').onDisconnect().set(false);
+    }
 }
 
 // Utility Functions
@@ -780,8 +992,9 @@ function switchScreen(screenName) {
 
 function copyLobbyCode() {
     const code = document.getElementById('current-lobby-code').textContent;
-    navigator.clipboard.writeText(code).then(() => {
-        alert('Lobby code copied to clipboard!');
+    const url = `${window.location.origin}${window.location.pathname}#lobby/${code}`;
+    navigator.clipboard.writeText(url).then(() => {
+        alert('Lobby link copied to clipboard! Share it with friends.');
     });
 }
 

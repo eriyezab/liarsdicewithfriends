@@ -3,15 +3,15 @@
     {
       "source": "functions",
       "codebase": "default",
-      "disallowLegacyRuntimeConfig": true,
       "ignore": [
-        "venv",
+        "node_modules",
         ".git",
         "firebase-debug.log",
         "firebase-debug.*.log",
-        "*.local"
-      ],
-      "runtime": "python313"
+        "*.local",
+        "*.py",
+        "venv"
+      ]
     }
   ],
   "apphosting": {
